@@ -44,7 +44,13 @@ export default function Login() {
       const destino = location.state?.from?.pathname || '/'
       navigate(destino, { replace: true })
     } catch (err) {
-      toast.error(err.message || 'Não foi possível entrar. Verifique suas credenciais.')
+      const mensagem = String(err?.message || '').toLowerCase()
+
+      if (mensagem.includes('failed to fetch')) {
+        toast.error('Falha de conexão com o Supabase. Verifique VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente de deploy.')
+      } else {
+        toast.error(err.message || 'Não foi possível entrar. Verifique suas credenciais.')
+      }
     } finally {
       setSaving(false)
     }

@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { regenerarAgrupamentosProducoes } from './producaoAgrupadadaService'
 
 const isDuplicateKeyError = (error) =>
   error?.code === '23505'
@@ -159,6 +160,13 @@ export const createProducao = async (producao) => {
     }])
   }
 
+  // 5. Regenerar agrupamentos
+  try {
+    await regenerarAgrupamentosProducoes()
+  } catch (err) {
+    console.error('[agrupamento] Erro ao regenerar agrupamentos:', err)
+  }
+
   return { producao: producaoData, planejamentoAlerta }
 }
 
@@ -220,5 +228,12 @@ export const deleteProducao = async (id) => {
       .eq('quantidade', estoqueDepois)
 
     if (estoqueUpdateError) throw estoqueUpdateError
+  }
+
+  // Regenerar agrupamentos
+  try {
+    await regenerarAgrupamentosProducoes()
+  } catch (err) {
+    console.error('[agrupamento] Erro ao regenerar agrupamentos:', err)
   }
 }

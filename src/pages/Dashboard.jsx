@@ -49,6 +49,10 @@ export default function Dashboard() {
     </div>
   )
 
+  const periodoSemana = (data.inicioSemana && data.fimSemana)
+    ? `${format(parseISO(data.inicioSemana), 'dd/MM/yyyy')} a ${format(parseISO(data.fimSemana), 'dd/MM/yyyy')}`
+    : '-'
+
   const totalProducaoSemana = data.producoesSemana.reduce(
     (acc, p) => acc + (p.quantidade_produzida || 0), 0
   )
@@ -86,6 +90,11 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm">
+        <p className="text-xs text-gray-500">Período da semana em análise</p>
+        <p className="text-sm font-semibold text-gray-800">{periodoSemana}</p>
+      </div>
+
       {/* Cards de métricas */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <MetricCard

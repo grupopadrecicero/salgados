@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, ChefHat } from 'lucide-react'
-import { format, parseISO } from 'date-fns'
+import { Plus, Trash2, ChefHat, ChevronDown } from 'lucide-react'
+import { format, parseISO, startOfWeek, addDays } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { getProducoes, createProducao, deleteProducao } from '../services/producaoService'
+import { getProducoesAgrupadas } from '../services/producaoAgrupadadaService'
 import { getProdutos } from '../services/produtosService'
 import { getTodayDateInAppTZ } from '../utils/dateTime'
 import Card, { CardHeader, CardBody } from '../components/ui/Card'
@@ -22,28 +23,48 @@ const FORM_VAZIO = {
   observacao:           '',
 }
 
-export default function Producao() {
-  const [producoes,   setProducoes]   = useState([])
-  const [produtos,    setProdutos]    = useState([])
-  const [loading,     setLoading]     = useState(true)
-  const [modalOpen,   setModalOpen]   = useState(false)
-  const [form,        setForm]        = useState(FORM_VAZIO)
-  const [saving,      setSaving]      = useState(false)
-  const [errors,      setErrors]      = useState({})
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const [deleteId,    setDeleteId]    = useState(null)
-  const [deleting,    setDeleting]    = useState(false)
-  const [filtroData,  setFiltroData]  = useState('')
+const getSemanaAtual = () => {
+  const inicioSemana = startOfWeek(new Date(), { weekStartsOn: 4 })
+  const fimSemana = addDays(inicioSemana, 6)
 
-  const carregar = () => {
+  return {
+    dataInicio: format(inicioSemana, 'yyyy-MM-dd'),
+    dataFim: format(fimSemana, 'yyyy-MM-dd'),
+  }
+}
+
+export default function Producao() {
+  const { dataInicio: inicioPadrao, dataFim: fimPadrao } = getSemanaAtual()
+  const [producoesAgrupadas, setProducoesAgrupadas] = useState([])
+  const [producoes,          setProducoes]          = useState([])
+  const [produtos,           setProdutos]           = useState([])
+  const [loading,            setLoading]            = useState(true)
+  const [modalOpen,          setModalOpen]          = useState(false)
+  const [form,               setForm]               = useState(FORM_VAZIO)
+  const [saving,             setSaving]             = useState(false)
+  const [errors,             setErrors]             = useState({})
+  const [confirmOpen,        setConfirmOpen]        = useState(false)
+  const [deleteId,           setDeleteId]           = useState(null)
+  const [deleting,           setDeleting]           = useState(false)
+  const [dataInicio,         setDataInicio]         = useState(inicioPadrao)
+  const [dataFim,            setDataFim]            = useState(fimPadrao)
+  const [expandedDays,       setExpandedDays]       = useState([])
+
+  const carregar = async () => {
     setLoading(true)
-    getProducoes(filtroData || undefined, filtroData || undefined)
-      .then(setProducoes)
-      .catch(() => toast.error('Erro ao carregar produções'))
-      .finally(() => setLoading(false))
+    try {
+      const agrupadas = await getProducoesAgrupadas(dataInicio || undefined, dataFim || undefined)
+      setProducoesAgrupadas(agrupadas)
+      const individuais = await getProducoes(dataInicio || undefined, dataFim || undefined)
+      setProducoes(individuais)
+    } catch (err) {
+      toast.error('Erro ao carregar produções')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  useEffect(() => { carregar() },     [filtroData])
+  useEffect(() => { carregar() },     [dataInicio, dataFim])
   useEffect(() => { getProdutos(true).then(setProdutos) }, [])
 
   const validar = () => {
@@ -94,7 +115,16 @@ export default function Producao() {
     }
   }
 
-  const totalSemana = producoes.reduce((a, p) => a + p.quantidade_produzida, 0)
+  const totalProducao = producoesAgrupadas.reduce((a, p) => a + p.quantidade_total, 0)
+  const totalGrupos = producoesAgrupadas.length
+
+  const toggleDay = (data) => {
+    setExpandedDays(prev => 
+      prev.includes(data) 
+        ? prev.filter(d => d !== data)
+        : [...prev, data]
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -102,28 +132,35 @@ export default function Producao() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
           <p className="text-xs text-gray-500 mb-1">Total no período</p>
-          <p className="text-2xl font-bold text-gray-800">{totalSemana.toLocaleString('pt-BR')}</p>
+          <p className="text-2xl font-bold text-gray-800">{totalProducao.toLocaleString('pt-BR')}</p>
           <p className="text-xs text-gray-400">unidades produzidas</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          <p className="text-xs text-gray-500 mb-1">Registros</p>
-          <p className="text-2xl font-bold text-gray-800">{producoes.length}</p>
-          <p className="text-xs text-gray-400">lotes registrados</p>
+          <p className="text-xs text-gray-500 mb-1">Dias com produção</p>
+          <p className="text-2xl font-bold text-gray-800">{totalGrupos}</p>
+          <p className="text-xs text-gray-400">dias agrupados</p>
         </div>
       </div>
 
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm text-gray-600 whitespace-nowrap">Filtrar por data:</label>
           <input
             type="date"
-            value={filtroData}
-            onChange={e => setFiltroData(e.target.value)}
+            value={dataInicio}
+            onChange={e => setDataInicio(e.target.value)}
             className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400"
           />
-          {filtroData && (
-            <button onClick={() => setFiltroData('')} className="text-xs text-primary-500 hover:underline">
+          <span className="text-sm text-gray-500">até</span>
+          <input
+            type="date"
+            value={dataFim}
+            onChange={e => setDataFim(e.target.value)}
+            className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400"
+          />
+          {(dataInicio || dataFim) && (
+            <button onClick={() => { setDataInicio(''); setDataFim('') }} className="text-xs text-primary-500 hover:underline">
               Limpar
             </button>
           )}
@@ -133,61 +170,89 @@ export default function Producao() {
         </Button>
       </div>
 
-      {/* Tabela */}
+      {/* Produções Agrupadas */}
       <Card>
         {loading ? <LoadingSpinner /> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Data</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Produto</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Tipo</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Qtd. Produzida</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Observação</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {producoes.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="text-center py-12 text-gray-400">
-                      <ChefHat size={32} className="mx-auto mb-2 opacity-30" />
-                      Nenhuma produção registrada.
-                    </td>
-                  </tr>
-                ) : producoes.map(p => (
-                  <tr key={p.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
-                      {format(parseISO(p.data), "dd/MM/yyyy (EEE)", { locale: ptBR })}
-                    </td>
-                    <td className="px-4 py-3 font-medium text-gray-800">{p.produtos?.nome}</td>
-                    <td className="px-4 py-3">
-                      <Badge color={p.produtos?.tipo === 'frito' ? 'orange' : 'blue'}>
-                        {p.produtos?.tipo === 'frito' ? 'Frito' : 'Assado'}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-800">
-                      {p.quantidade_produzida.toLocaleString('pt-BR')}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 max-w-xs truncate">{p.observacao || '—'}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end">
-                        <button
-                          onClick={() => { setDeleteId(p.id); setConfirmOpen(true) }}
-                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+          <div className="divide-y divide-gray-200">
+            {producoesAgrupadas.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <ChefHat size={32} className="mx-auto mb-2 opacity-30" />
+                Nenhuma produção registrada.
+              </div>
+            ) : (
+              producoesAgrupadas.map(agrupada => {
+                const isExpanded = expandedDays.includes(agrupada.data)
+                const dataFormatada = format(parseISO(agrupada.data), "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })
+                
+                return (
+                  <div key={agrupada.id}>
+                    {/* Cabeçalho do dia */}
+                    <button
+                      onClick={() => toggleDay(agrupada.data)}
+                      className="w-full px-4 py-4 hover:bg-gray-50 transition-colors flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-4 flex-1 text-left">
+                        <ChevronDown 
+                          size={20} 
+                          className={`text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`}
+                        />
+                        <div className="flex-1">
+                          <p className="font-semibold text-gray-800 capitalize">{dataFormatada}</p>
+                          <p className="text-xs text-gray-500">{agrupada.numero_registros} lote(s)</p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="font-bold text-gray-800">{agrupada.quantidade_total.toLocaleString('pt-BR')}</p>
+                          <p className="text-xs text-gray-500">unidades</p>
+                        </div>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="px-4 py-2 border-t border-gray-100 text-xs text-gray-400">
-              {producoes.length} registro(s)
-            </div>
+                    </button>
+
+                    {/* Detalhes do dia */}
+                    {isExpanded && agrupada.producoes_agrupadas_detalhes && agrupada.producoes_agrupadas_detalhes.length > 0 && (
+                      <div className="bg-gray-50 px-4 py-3 border-t border-gray-100">
+                        <div className="space-y-2">
+                          {agrupada.producoes_agrupadas_detalhes.map(detalhe => (
+                            <div key={detalhe.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2">
+                              <div className="flex items-center gap-3 flex-1">
+                                <Badge color={detalhe.produtos?.tipo === 'frito' ? 'orange' : 'blue'}>
+                                  {detalhe.produtos?.tipo === 'frito' ? 'Frito' : 'Assado'}
+                                </Badge>
+                                <div>
+                                  <p className="font-medium text-gray-800">{detalhe.produtos?.nome}</p>
+                                  <p className="text-xs text-gray-500">{detalhe.numero_registros} registro(s)</p>
+                                </div>
+                              </div>
+                              <p className="font-semibold text-gray-800">{detalhe.quantidade_total.toLocaleString('pt-BR')} un.</p>
+                            </div>
+                          ))}
+                        </div>
+                        
+                        {/* Produções individuais do dia */}
+                        <div className="mt-3 pt-3 border-t border-gray-200">
+                          <p className="text-xs font-medium text-gray-600 mb-2">Lotes individuais:</p>
+                          <div className="space-y-1">
+                            {producoes.filter(p => p.data === agrupada.data).map(p => (
+                              <div key={p.id} className="flex items-center justify-between text-xs bg-white rounded px-2 py-1 border border-gray-100">
+                                <span className="text-gray-700">{p.produtos?.nome}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-gray-800">{p.quantidade_produzida.toLocaleString('pt-BR')} un.</span>
+                                  <button
+                                    onClick={() => { setDeleteId(p.id); setConfirmOpen(true) }}
+                                    className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
           </div>
         )}
       </Card>

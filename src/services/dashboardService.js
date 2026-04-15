@@ -3,8 +3,8 @@ import { startOfWeek, endOfWeek, format } from 'date-fns'
 
 export const getDashboardData = async () => {
   const hoje        = new Date()
-  const inicioSemana = format(startOfWeek(hoje, { weekStartsOn: 1 }), 'yyyy-MM-dd')
-  const fimSemana    = format(endOfWeek(hoje,   { weekStartsOn: 1 }), 'yyyy-MM-dd')
+  const inicioSemana = format(startOfWeek(hoje, { weekStartsOn: 4 }), 'yyyy-MM-dd')
+  const fimSemana    = format(endOfWeek(hoje,   { weekStartsOn: 4 }), 'yyyy-MM-dd')
 
   // Produção da semana
   const { data: producoesSemana } = await supabase

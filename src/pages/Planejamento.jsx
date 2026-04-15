@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Printer } from 'lucide-react'
+import { Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Printer, Copy } from 'lucide-react'
 import { format, startOfWeek, addDays, addWeeks, subWeeks, parseISO } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import {
@@ -52,6 +52,7 @@ export default function Planejamento() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [deleteId,    setDeleteId]    = useState(null)
   const [deleting,    setDeleting]    = useState(false)
+  const [duplicating, setDuplicating] = useState(false)
 
   const inicioSemana = startOfWeek(semana, { weekStartsOn: 4 })
   const fimSemana    = addDays(inicioSemana, 6)
@@ -122,6 +123,64 @@ export default function Planejamento() {
       toast.error('Erro ao excluir item.')
     } finally {
       setDeleting(false)
+    }
+  }
+
+  const duplicarSemanaPassada = async () => {
+    setDuplicating(true)
+    try {
+      const inicioSemanaPassada = subWeeks(inicioSemana, 1)
+      const fimSemanaPassada = subWeeks(fimSemana, 1)
+      const itensSemanaPassada = await getPlanejamentos(
+        format(inicioSemanaPassada, 'yyyy-MM-dd'),
+        format(fimSemanaPassada, 'yyyy-MM-dd')
+      )
+
+      if (!itensSemanaPassada || itensSemanaPassada.length === 0) {
+        toast.error('Não há itens na semana passada para duplicar.')
+        return
+      }
+
+      const chavesSemanaAtual = new Set(
+        itens.map((item) => `${item.data}-${item.produto_id}`)
+      )
+
+      const novosItens = itensSemanaPassada
+        .map((item) => ({
+          data: format(addDays(parseISO(item.data), 7), 'yyyy-MM-dd'),
+          produto_id: item.produto_id,
+          quantidade_planejada: Number(item.quantidade_planejada) || 0,
+          status: 'planejado',
+        }))
+        .filter((item) => item.quantidade_planejada > 0)
+        .filter((item) => !chavesSemanaAtual.has(`${item.data}-${item.produto_id}`))
+
+      if (novosItens.length === 0) {
+        toast.error('Todos os itens da semana passada já existem nesta semana.')
+        return
+      }
+
+      const resultados = await Promise.allSettled(
+        novosItens.map((item) => createPlanejamento(item))
+      )
+
+      const sucesso = resultados.filter((r) => r.status === 'fulfilled').length
+      const falha = resultados.length - sucesso
+
+      if (sucesso > 0) {
+        toast.success(
+          falha > 0
+            ? `Duplicação parcial: ${sucesso} item(ns) copiado(s), ${falha} com erro.`
+            : `${sucesso} item(ns) copiado(s) da semana passada.`
+        )
+        carregar()
+      } else {
+        toast.error('Não foi possível duplicar os itens da semana passada.')
+      }
+    } catch (err) {
+      toast.error(err.message || 'Erro ao duplicar semana passada')
+    } finally {
+      setDuplicating(false)
     }
   }
 
@@ -312,6 +371,14 @@ export default function Planejamento() {
           </button>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={duplicarSemanaPassada}
+            loading={duplicating}
+          >
+            <Copy size={14} /> Duplicar semana passada
+          </Button>
           <Button variant="secondary" onClick={imprimirSemana}>
             <Printer size={16} /> Imprimir Semana
           </Button>

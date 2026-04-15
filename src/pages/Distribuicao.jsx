@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Truck } from 'lucide-react'
+import { Plus, Pencil, Trash2, Truck, ChevronDown } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import { getDistribuicoes, createDistribuicao, deleteDistribuicao } from '../services/distribuicaoService'
+import { getDistribuicoes, createDistribuicao, updateDistribuicao, deleteDistribuicao } from '../services/distribuicaoService'
+import { getDistribuicoesAgrupadas } from '../services/distribuicaoAgrupadadaService'
 import { getProdutos } from '../services/produtosService'
 import { getUnidades } from '../services/unidadesService'
 import { getEstoque } from '../services/estoqueService'
@@ -25,37 +26,87 @@ const FORM_VAZIO = {
 }
 
 export default function Distribuicao() {
-  const [distribuicoes, setDistribuicoes] = useState([])
-  const [produtos,      setProdutos]      = useState([])
-  const [unidades,      setUnidades]      = useState([])
-  const [estoque,       setEstoque]       = useState([])
-  const [loading,       setLoading]       = useState(true)
-  const [modalOpen,     setModalOpen]     = useState(false)
-  const [form,          setForm]          = useState(FORM_VAZIO)
-  const [saving,        setSaving]        = useState(false)
-  const [errors,        setErrors]        = useState({})
-  const [confirmOpen,   setConfirmOpen]   = useState(false)
-  const [deleteId,      setDeleteId]      = useState(null)
-  const [deleting,      setDeleting]      = useState(false)
-  const [filtroData,    setFiltroData]    = useState('')
+  const REGISTROS_POR_PAGINA = 10
+  const [distribuicoesAgrupadas, setDistribuicoesAgrupadas] = useState([])
+  const [distribuicoes,          setDistribuicoes]          = useState([])
+  const [produtos,               setProdutos]               = useState([])
+  const [unidades,               setUnidades]               = useState([])
+  const [estoque,                setEstoque]                = useState([])
+  const [loading,                setLoading]                = useState(true)
+  const [modalOpen,              setModalOpen]              = useState(false)
+  const [form,                   setForm]                   = useState(FORM_VAZIO)
+  const [editId,                 setEditId]                 = useState(null)
+  const [editOriginal,           setEditOriginal]           = useState(null)
+  const [saving,                 setSaving]                 = useState(false)
+  const [errors,                 setErrors]                 = useState({})
+  const [confirmOpen,            setConfirmOpen]            = useState(false)
+  const [deleteId,               setDeleteId]               = useState(null)
+  const [deleting,               setDeleting]               = useState(false)
+  const [filtroData,             setFiltroData]             = useState('')
+  const [expandedUnits,          setExpandedUnits]          = useState([])
+  const [paginaAtual,            setPaginaAtual]            = useState(1)
 
-  const carregar = () => {
+  const carregar = async () => {
     setLoading(true)
-    getDistribuicoes(filtroData || undefined, filtroData || undefined)
-      .then(setDistribuicoes)
-      .catch(() => toast.error('Erro ao carregar distribuições'))
-      .finally(() => setLoading(false))
+    try {
+      const agrupadas = await getDistribuicoesAgrupadas(filtroData || undefined, filtroData || undefined)
+      setDistribuicoesAgrupadas(agrupadas)
+      const individuais = await getDistribuicoes(filtroData || undefined, filtroData || undefined)
+      setDistribuicoes(individuais)
+    } catch (err) {
+      toast.error('Erro ao carregar distribuições')
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => { carregar() }, [filtroData])
+  useEffect(() => { setPaginaAtual(1) }, [filtroData])
   useEffect(() => {
     getProdutos(true).then(setProdutos)
     getUnidades(true).then(setUnidades)
     getEstoque().then(setEstoque)
   }, [])
 
-  // Estoque disponível do produto selecionado
-  const estoqueDisponivel = estoque.find(e => e.produto_id === form.produto_id)?.quantidade ?? null
+  // Em edição, soma a quantidade original ao saldo para não bloquear o próprio registro.
+  const estoqueDisponivel = (() => {
+    if (!form.produto_id) return null
+    const saldoAtual = Number(estoque.find(e => e.produto_id === form.produto_id)?.quantidade || 0)
+    if (editOriginal?.produto_id === form.produto_id) {
+      return saldoAtual + Number(editOriginal.quantidade || 0)
+    }
+    return saldoAtual
+  })()
+
+  const abrirModal = (item = null) => {
+    if (item) {
+      setEditId(item.id)
+      setEditOriginal({
+        produto_id: item.produto_id,
+        quantidade: Number(item.quantidade) || 0,
+      })
+      setForm({
+        data: item.data,
+        unidade_id: item.unidade_id,
+        produto_id: item.produto_id,
+        quantidade: String(item.quantidade),
+      })
+    } else {
+      setEditId(null)
+      setEditOriginal(null)
+      setForm(FORM_VAZIO)
+    }
+    setErrors({})
+    setModalOpen(true)
+  }
+
+  const fecharModal = () => {
+    setModalOpen(false)
+    setEditId(null)
+    setEditOriginal(null)
+    setForm(FORM_VAZIO)
+    setErrors({})
+  }
 
   const validar = () => {
     const e = {}
@@ -76,10 +127,14 @@ export default function Distribuicao() {
     setSaving(true)
     try {
       const dados = { ...form, quantidade: Number(form.quantidade) }
-      await createDistribuicao(dados)
-      toast.success('Distribuição registrada! Estoque atualizado.')
-      setModalOpen(false)
-      setForm(FORM_VAZIO)
+      if (editId) {
+        await updateDistribuicao(editId, dados)
+        toast.success('Distribuição atualizada! Estoque ajustado.')
+      } else {
+        await createDistribuicao(dados)
+        toast.success('Distribuição registrada! Estoque atualizado.')
+      }
+      fecharModal()
       carregar()
       // Atualizar estoque exibido
       getEstoque().then(setEstoque)
@@ -105,7 +160,21 @@ export default function Distribuicao() {
     }
   }
 
-  const totalDistribuido = distribuicoes.reduce((a, d) => a + d.quantidade, 0)
+  const totalDistribuido = distribuicoesAgrupadas.reduce((a, d) => a + d.quantidade_total, 0)
+  const totalUnidades = distribuicoesAgrupadas.length
+  const totalPaginas = Math.max(1, Math.ceil(distribuicoesAgrupadas.length / REGISTROS_POR_PAGINA))
+  const paginaSegura = Math.min(paginaAtual, totalPaginas)
+  const inicioPagina = (paginaSegura - 1) * REGISTROS_POR_PAGINA
+  const fimPagina = inicioPagina + REGISTROS_POR_PAGINA
+  const distribuicoesPaginadas = distribuicoesAgrupadas.slice(inicioPagina, fimPagina)
+
+  const toggleUnit = (id) => {
+    setExpandedUnits(prev => 
+      prev.includes(id)
+        ? prev.filter(u => u !== id)
+        : [...prev, id]
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -117,9 +186,9 @@ export default function Distribuicao() {
           <p className="text-xs text-gray-400">unidades enviadas</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          <p className="text-xs text-gray-500 mb-1">Registros</p>
-          <p className="text-2xl font-bold text-gray-800">{distribuicoes.length}</p>
-          <p className="text-xs text-gray-400">envios registrados</p>
+          <p className="text-xs text-gray-500 mb-1">Unidades com distribuição</p>
+          <p className="text-2xl font-bold text-gray-800">{totalUnidades}</p>
+          <p className="text-xs text-gray-400">unidades agrupadas</p>
         </div>
       </div>
 
@@ -139,68 +208,152 @@ export default function Distribuicao() {
             </button>
           )}
         </div>
-        <Button onClick={() => { setForm(FORM_VAZIO); setErrors({}); setModalOpen(true) }}>
+        <Button onClick={() => abrirModal()}>
           <Plus size={16} /> Nova Distribuição
         </Button>
       </div>
 
-      {/* Tabela */}
+      {/* Distribuições Agrupadas por Unidade */}
       <Card>
         {loading ? <LoadingSpinner /> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Data</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Unidade</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Cidade</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Produto</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Quantidade</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {distribuicoes.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="text-center py-12 text-gray-400">
-                      <Truck size={32} className="mx-auto mb-2 opacity-30" />
-                      Nenhuma distribuição registrada.
-                    </td>
-                  </tr>
-                ) : distribuicoes.map(d => (
-                  <tr key={d.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
-                      {format(parseISO(d.data), "dd/MM/yyyy (EEE)", { locale: ptBR })}
-                    </td>
-                    <td className="px-4 py-3 font-medium text-gray-800">{d.unidades?.nome}</td>
-                    <td className="px-4 py-3 text-gray-500">{d.unidades?.cidade}</td>
-                    <td className="px-4 py-3 text-gray-700">{d.produtos?.nome}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-800">
-                      {d.quantidade.toLocaleString('pt-BR')}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end">
-                        <button
-                          onClick={() => { setDeleteId(d.id); setConfirmOpen(true) }}
-                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+          <div className="divide-y divide-gray-200">
+            {distribuicoesAgrupadas.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <Truck size={32} className="mx-auto mb-2 opacity-30" />
+                Nenhuma distribuição registrada.
+              </div>
+            ) : (
+              distribuicoesPaginadas.map(agrupada => {
+                const isExpanded = expandedUnits.includes(agrupada.id)
+                
+                return (
+                  <div key={agrupada.id}>
+                    {/* Cabeçalho da unidade */}
+                    <button
+                      onClick={() => toggleUnit(agrupada.id)}
+                      className="w-full px-4 py-4 hover:bg-gray-50 transition-colors flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-4 flex-1 text-left">
+                        <ChevronDown 
+                          size={20} 
+                          className={`text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`}
+                        />
+                        <div className="flex-1">
+                          <p className="font-semibold text-gray-800">
+                            {agrupada.unidades?.nome} • {agrupada.unidades?.cidade}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {format(parseISO(agrupada.data), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })} • {agrupada.numero_registros} distribuição(ões)
+                          </p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="font-bold text-gray-800">{agrupada.quantidade_total.toLocaleString('pt-BR')}</p>
+                          <p className="text-xs text-gray-500">unidades</p>
+                        </div>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="px-4 py-2 border-t border-gray-100 text-xs text-gray-400">
-              {distribuicoes.length} registro(s)
-            </div>
+                    </button>
+
+                    {/* Detalhes dos produtos distribuídos */}
+                    {isExpanded && agrupada.distribuicoes_agrupadas_detalhes && agrupada.distribuicoes_agrupadas_detalhes.length > 0 && (
+                      <div className="bg-gray-50 px-4 py-3 border-t border-gray-100">
+                        <div className="space-y-2 mb-4">
+                          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">Produtos distribuídos</p>
+                          {agrupada.distribuicoes_agrupadas_detalhes.map(detalhe => (
+                            <div key={detalhe.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-100">
+                              <div className="flex items-center gap-3 flex-1">
+                                <Badge color={detalhe.produtos?.tipo === 'frito' ? 'orange' : 'blue'}>
+                                  {detalhe.produtos?.tipo === 'frito' ? 'Frito' : 'Assado'}
+                                </Badge>
+                                <div>
+                                  <p className="font-medium text-gray-800">{detalhe.produtos?.nome}</p>
+                                  <p className="text-xs text-gray-500">{detalhe.numero_registros} envio(s)</p>
+                                </div>
+                              </div>
+                              <p className="font-semibold text-gray-800 text-right min-w-fit">{detalhe.quantidade_total.toLocaleString('pt-BR')} un.</p>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Data de distribuição */}
+                        <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                          <p className="text-xs text-blue-700">
+                            <span className="font-semibold">Data:</span> {format(parseISO(agrupada.data), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+                          </p>
+                        </div>
+
+                        {/* Distribuições individuais */}
+                        <div className="mt-3 pt-3 border-t border-gray-200">
+                          <p className="text-xs font-medium text-gray-600 mb-2">Envios individuais:</p>
+                          <div className="space-y-1 max-h-48 overflow-y-auto">
+                            {distribuicoes
+                              .filter(d => d.unidade_id === agrupada.unidade_id && d.data === agrupada.data)
+                              .map(d => (
+                                <div key={d.id} className="flex items-center justify-between text-xs bg-white rounded px-2 py-1 border border-gray-100">
+                                  <span className="text-gray-700">{d.produtos?.nome}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-gray-800">{d.quantidade.toLocaleString('pt-BR')} un.</span>
+                                    <button
+                                      onClick={() => abrirModal(d)}
+                                      className="p-1 text-gray-400 hover:text-primary-500 hover:bg-primary-50 rounded"
+                                    >
+                                      <Pencil size={12} />
+                                    </button>
+                                    <button
+                                      onClick={() => { setDeleteId(d.id); setConfirmOpen(true) }}
+                                      className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
           </div>
         )}
       </Card>
 
+      {!loading && distribuicoesAgrupadas.length > REGISTROS_POR_PAGINA && (
+        <div className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm">
+          <p className="text-xs text-gray-500">
+            Mostrando {inicioPagina + 1}-{Math.min(fimPagina, distribuicoesAgrupadas.length)} de {distribuicoesAgrupadas.length} registros
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={paginaSegura === 1}
+              onClick={() => setPaginaAtual(p => Math.max(1, p - 1))}
+            >
+              Anterior
+            </Button>
+            <span className="text-xs text-gray-600 min-w-[70px] text-center">
+              Página {paginaSegura} de {totalPaginas}
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={paginaSegura >= totalPaginas}
+              onClick={() => setPaginaAtual(p => Math.min(totalPaginas, p + 1))}
+            >
+              Próxima
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Modal */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Registrar Distribuição">
+      <Modal
+        open={modalOpen}
+        onClose={fecharModal}
+        title={editId ? 'Editar Distribuição' : 'Registrar Distribuição'}
+      >
         <div className="space-y-4">
           <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700">
             A quantidade será automaticamente subtraída do estoque da câmara fria. Distribuições só são permitidas se houver estoque suficiente.
@@ -231,7 +384,10 @@ export default function Distribuicao() {
           >
             <option value="">Selecione o produto...</option>
             {produtos.map(p => {
-              const disponivel = estoque.find(e => e.produto_id === p.id)?.quantidade ?? 0
+              const saldoAtual = Number(estoque.find(e => e.produto_id === p.id)?.quantidade || 0)
+              const disponivel = editOriginal?.produto_id === p.id
+                ? saldoAtual + Number(editOriginal.quantidade || 0)
+                : saldoAtual
               return (
                 <option key={p.id} value={p.id} disabled={disponivel === 0}>
                   {p.nome} (estoque: {disponivel})
@@ -255,8 +411,8 @@ export default function Distribuicao() {
             placeholder="0"
           />
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setModalOpen(false)}>Cancelar</Button>
-            <Button onClick={salvar} loading={saving}>Registrar</Button>
+            <Button variant="secondary" onClick={fecharModal}>Cancelar</Button>
+            <Button onClick={salvar} loading={saving}>{editId ? 'Salvar alterações' : 'Registrar'}</Button>
           </div>
         </div>
       </Modal>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Plus, Pencil, Trash2, Truck, ChevronDown } from 'lucide-react'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, startOfMonth, endOfMonth } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { getDistribuicoes, createDistribuicao, updateDistribuicao, deleteDistribuicao } from '../services/distribuicaoService'
 import { getDistribuicoesAgrupadas } from '../services/distribuicaoAgrupadadaService'
@@ -8,7 +8,7 @@ import { getProdutos } from '../services/produtosService'
 import { getUnidades } from '../services/unidadesService'
 import { getEstoque } from '../services/estoqueService'
 import { getTodayDateInAppTZ } from '../utils/dateTime'
-import Card, { CardHeader } from '../components/ui/Card'
+import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Modal from '../components/ui/Modal'
 import Input from '../components/ui/Input'
@@ -25,8 +25,14 @@ const FORM_VAZIO = {
   quantidade: '',
 }
 
+const getMesAtual = () => ({
+  dataInicio: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+  dataFim: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+})
+
 export default function Distribuicao() {
   const REGISTROS_POR_PAGINA = 10
+  const { dataInicio: inicioPadrao, dataFim: fimPadrao } = getMesAtual()
   const [distribuicoesAgrupadas, setDistribuicoesAgrupadas] = useState([])
   const [distribuicoes,          setDistribuicoes]          = useState([])
   const [produtos,               setProdutos]               = useState([])
@@ -42,16 +48,18 @@ export default function Distribuicao() {
   const [confirmOpen,            setConfirmOpen]            = useState(false)
   const [deleteId,               setDeleteId]               = useState(null)
   const [deleting,               setDeleting]               = useState(false)
-  const [filtroData,             setFiltroData]             = useState('')
+  const [dataInicio,             setDataInicio]             = useState(inicioPadrao)
+  const [dataFim,                setDataFim]                = useState(fimPadrao)
+  const [unidadeSelecionada,     setUnidadeSelecionada]     = useState('todos')
   const [expandedUnits,          setExpandedUnits]          = useState([])
   const [paginaAtual,            setPaginaAtual]            = useState(1)
 
   const carregar = async () => {
     setLoading(true)
     try {
-      const agrupadas = await getDistribuicoesAgrupadas(filtroData || undefined, filtroData || undefined)
+      const agrupadas = await getDistribuicoesAgrupadas(dataInicio || undefined, dataFim || undefined)
       setDistribuicoesAgrupadas(agrupadas)
-      const individuais = await getDistribuicoes(filtroData || undefined, filtroData || undefined)
+      const individuais = await getDistribuicoes(dataInicio || undefined, dataFim || undefined)
       setDistribuicoes(individuais)
     } catch (err) {
       toast.error('Erro ao carregar distribuições')
@@ -60,13 +68,45 @@ export default function Distribuicao() {
     }
   }
 
-  useEffect(() => { carregar() }, [filtroData])
-  useEffect(() => { setPaginaAtual(1) }, [filtroData])
+  useEffect(() => { carregar() }, [dataInicio, dataFim])
+  useEffect(() => {
+    setPaginaAtual(1)
+    setExpandedUnits([])
+  }, [dataInicio, dataFim, unidadeSelecionada])
   useEffect(() => {
     getProdutos(true).then(setProdutos)
     getUnidades(true).then(setUnidades)
     getEstoque().then(setEstoque)
   }, [])
+
+  const unidadesComDistribuicao = Array.from(
+    distribuicoesAgrupadas.reduce((map, item) => {
+      if (!item.unidade_id) return map
+      if (map.has(item.unidade_id)) return map
+      map.set(item.unidade_id, {
+        id: item.unidade_id,
+        nome: item.unidades?.nome || 'Unidade',
+        cidade: item.unidades?.cidade || '',
+      })
+      return map
+    }, new Map()).values()
+  ).sort((a, b) => {
+    const nomeCompare = a.nome.localeCompare(b.nome, 'pt-BR')
+    if (nomeCompare !== 0) return nomeCompare
+    return a.cidade.localeCompare(b.cidade, 'pt-BR')
+  })
+
+  useEffect(() => {
+    if (unidadesComDistribuicao.length === 0) {
+      if (unidadeSelecionada !== 'todos') setUnidadeSelecionada('todos')
+      return
+    }
+
+    const unidadeExiste = unidadesComDistribuicao.some(u => u.id === unidadeSelecionada)
+    if (unidadeSelecionada !== 'todos' && !unidadeExiste) {
+      setUnidadeSelecionada('todos')
+    }
+  }, [unidadesComDistribuicao, unidadeSelecionada])
 
   // Em edição, soma a quantidade original ao saldo para não bloquear o próprio registro.
   const estoqueDisponivel = (() => {
@@ -160,13 +200,17 @@ export default function Distribuicao() {
     }
   }
 
-  const totalDistribuido = distribuicoesAgrupadas.reduce((a, d) => a + d.quantidade_total, 0)
-  const totalUnidades = distribuicoesAgrupadas.length
-  const totalPaginas = Math.max(1, Math.ceil(distribuicoesAgrupadas.length / REGISTROS_POR_PAGINA))
+  const distribuicoesFiltradas = unidadeSelecionada && unidadeSelecionada !== 'todos'
+    ? distribuicoesAgrupadas.filter(d => d.unidade_id === unidadeSelecionada)
+    : distribuicoesAgrupadas
+
+  const totalSalgadosDistribuidos = distribuicoesFiltradas.reduce((a, d) => a + d.quantidade_total, 0)
+  const totalUnidades = unidadesComDistribuicao.length
+  const totalPaginas = Math.max(1, Math.ceil(distribuicoesFiltradas.length / REGISTROS_POR_PAGINA))
   const paginaSegura = Math.min(paginaAtual, totalPaginas)
   const inicioPagina = (paginaSegura - 1) * REGISTROS_POR_PAGINA
   const fimPagina = inicioPagina + REGISTROS_POR_PAGINA
-  const distribuicoesPaginadas = distribuicoesAgrupadas.slice(inicioPagina, fimPagina)
+  const distribuicoesPaginadas = distribuicoesFiltradas.slice(inicioPagina, fimPagina)
 
   const toggleUnit = (id) => {
     setExpandedUnits(prev => 
@@ -181,9 +225,9 @@ export default function Distribuicao() {
       {/* Resumo */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          <p className="text-xs text-gray-500 mb-1">Total distribuído no período</p>
-          <p className="text-2xl font-bold text-gray-800">{totalDistribuido.toLocaleString('pt-BR')}</p>
-          <p className="text-xs text-gray-400">unidades enviadas</p>
+          <p className="text-xs text-gray-500 mb-1">Total de salgados distribuídos</p>
+          <p className="text-2xl font-bold text-gray-800">{totalSalgadosDistribuidos.toLocaleString('pt-BR')}</p>
+          <p className="text-xs text-gray-400">salgados no período/aba selecionada</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
           <p className="text-xs text-gray-500 mb-1">Unidades com distribuição</p>
@@ -194,16 +238,23 @@ export default function Distribuicao() {
 
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600 whitespace-nowrap">Filtrar por data:</label>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-sm text-gray-600 whitespace-nowrap">Filtrar por período:</label>
           <input
             type="date"
-            value={filtroData}
-            onChange={e => setFiltroData(e.target.value)}
+            value={dataInicio}
+            onChange={e => setDataInicio(e.target.value)}
             className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400"
           />
-          {filtroData && (
-            <button onClick={() => setFiltroData('')} className="text-xs text-primary-500 hover:underline">
+          <span className="text-sm text-gray-500">até</span>
+          <input
+            type="date"
+            value={dataFim}
+            onChange={e => setDataFim(e.target.value)}
+            className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-400"
+          />
+          {(dataInicio || dataFim) && (
+            <button onClick={() => { setDataInicio(''); setDataFim('') }} className="text-xs text-primary-500 hover:underline">
               Limpar
             </button>
           )}
@@ -213,11 +264,44 @@ export default function Distribuicao() {
         </Button>
       </div>
 
+      {unidadesComDistribuicao.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl p-2 shadow-sm overflow-x-auto">
+          <div className="flex items-center gap-2 min-w-max">
+            <button
+              onClick={() => setUnidadeSelecionada('todos')}
+              className={`px-3 py-2 rounded-lg text-sm transition-colors border ${
+                unidadeSelecionada === 'todos'
+                  ? 'bg-primary-500 text-white border-primary-500'
+                  : 'bg-white text-gray-700 border-gray-200 hover:border-primary-300 hover:text-primary-600'
+              }`}
+            >
+              Todos
+            </button>
+            {unidadesComDistribuicao.map(unidade => {
+              const ativa = unidadeSelecionada === unidade.id
+              return (
+                <button
+                  key={unidade.id}
+                  onClick={() => setUnidadeSelecionada(unidade.id)}
+                  className={`px-3 py-2 rounded-lg text-sm transition-colors border ${
+                    ativa
+                      ? 'bg-primary-500 text-white border-primary-500'
+                      : 'bg-white text-gray-700 border-gray-200 hover:border-primary-300 hover:text-primary-600'
+                  }`}
+                >
+                  {unidade.nome}{unidade.cidade ? ` • ${unidade.cidade}` : ''}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Distribuições Agrupadas por Unidade */}
       <Card>
         {loading ? <LoadingSpinner /> : (
           <div className="divide-y divide-gray-200">
-            {distribuicoesAgrupadas.length === 0 ? (
+            {distribuicoesFiltradas.length === 0 ? (
               <div className="text-center py-12 text-gray-400">
                 <Truck size={32} className="mx-auto mb-2 opacity-30" />
                 Nenhuma distribuição registrada.
@@ -319,10 +403,10 @@ export default function Distribuicao() {
         )}
       </Card>
 
-      {!loading && distribuicoesAgrupadas.length > REGISTROS_POR_PAGINA && (
+      {!loading && distribuicoesFiltradas.length > REGISTROS_POR_PAGINA && (
         <div className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm">
           <p className="text-xs text-gray-500">
-            Mostrando {inicioPagina + 1}-{Math.min(fimPagina, distribuicoesAgrupadas.length)} de {distribuicoesAgrupadas.length} registros
+            Mostrando {inicioPagina + 1}-{Math.min(fimPagina, distribuicoesFiltradas.length)} de {distribuicoesFiltradas.length} registros
           </p>
           <div className="flex items-center gap-2">
             <Button
